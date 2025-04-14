@@ -1,5 +1,6 @@
 import numpy as np
 import os
+from ultralytics import yolo
 
 # KML generation function
 def create_kml(positions, output_kml_path):
@@ -77,53 +78,6 @@ def ecef_to_geodetic_bowring(x, y, z, max_iterations=10, tolerance=1e-15):
 
     return np.degrees(longitude), np.degrees(latitude), altitude
 
-""" Not needed for now
-# Function to convert ECEF to ENU (East, North, Up)
-def ecef_to_enu(drone_lat, drone_lon, drone_alt, point_ecef):
-    lat_rad = np.radians(drone_lat)
-    lon_rad = np.radians(drone_lon)
-
-    # Compute the ECEF position of the drone
-    drone_ecef = geodetic_to_ecef(drone_lat, drone_lon, drone_alt)
-
-    # Calculate the vector from the drone to the point in ECEF
-    ecef_vector = point_ecef - drone_ecef
-
-    # Rotation matrix from ECEF to ENU
-    R = np.array([
-        [-np.sin(lon_rad), np.cos(lon_rad), 0],
-        [-np.sin(lat_rad) * np.cos(lon_rad), -np.sin(lat_rad) * np.sin(lon_rad), np.cos(lat_rad)],
-        [np.cos(lat_rad) * np.cos(lon_rad), np.cos(lat_rad) * np.sin(lon_rad), np.sin(lat_rad)]
-    ], dtype=np.float64)
-
-    # Rotate the ECEF vector to the ENU frame
-    enu_vector = np.dot(R, ecef_vector)
-
-    return enu_vector
-
-# Function to convert ENU to ECEF with matrix multiplication (maintaining precision)
-def enu_to_ecef(drone_lat, drone_lon, drone_alt, enu_vector):
-    drone_ecef = geodetic_to_ecef(drone_lat, drone_lon, drone_alt)
-
-    # Convert drone geodetic coordinates to radians
-    lat_rad = np.radians(drone_lat)
-    lon_rad = np.radians(drone_lon)
-
-    # Rotation matrix from ENU to ECEF (transpose of ECEF-to-ENU)
-    R = np.array([
-        [-np.sin(lon_rad), -np.sin(lat_rad) * np.cos(lon_rad), np.cos(lat_rad) * np.cos(lon_rad)],
-        [np.cos(lon_rad), -np.sin(lat_rad) * np.sin(lon_rad), np.cos(lat_rad) * np.sin(lon_rad)],
-        [0, np.cos(lat_rad), np.sin(lat_rad)]
-    ], dtype=np.float64)
-
-    # Rotate the ENU vector back to ECEF
-    ecef_offset = np.dot(R, enu_vector)
-
-    # Add the offset to the ECEF position of the drone
-    ecef_vector = drone_ecef + ecef_offset
-
-    return ecef_vector
-"""
 
 def fire_img_position_normalized(
     box, focal_length, sensor_width, sensor_height
@@ -184,13 +138,10 @@ def read_yolo_annotations(yolo_file, class_mapping):
             width = float(parts[3])
             height = float(parts[4])
             
-            # Get the corresponding class name from the mapping
-            class_name = class_mapping.get(class_id, "Unknown")
-            
             # Create a dictionary for the bounding box with specified keys
             bounding_box_entry = {
                 "class": class_id,
-                "label": class_name,
+                "label": 0,
                 "x_center": x_center,
                 "y_center": y_center,
                 "width": width,
@@ -201,57 +152,51 @@ def read_yolo_annotations(yolo_file, class_mapping):
     
     return bounding_boxes
 
-# Turn degrees, minutes and seconds gps coordinates to decimal gps coordinates
-""" 
-def gps_dms_to_decimal(dms_str):
-    # Regular expression to extract degrees, minutes, seconds, and direction
-    match = re.match(r"(\d+) deg (\d+)' ([\d.]+)\" ([NSEW])", dms_str)
-    
-    if match:
-        degrees = float(match.group(1))
-        minutes = float(match.group(2))
-        seconds = float(match.group(3))
-        direction = match.group(4)
-        
-        # Convert to decimal degrees
-        decimal_degrees = degrees + (minutes / 60) + (seconds / 3600)
-        
-        # Adjust for direction
-        if direction in ['S', 'W']:  # South and West should be negative
-            decimal_degrees = -decimal_degrees
-        
-        return round(decimal_degrees, 15)
-    else:
-        raise ValueError("Format error: Could not parse GPS coordinate.")
-"""
-
-def main(images_folder, yolo_folder, output_json, output_yaml, output_html, template_html, class_mapping):
+def localisationFeux(yolo_annotation_folder, drone_telemetry_folder):
     #We will need to read the files that hold the gps positions of the drone, gimbal angles and drone angles, when a fire is dectected
     #to calculate where that fire is positionned in gps_decimal values
 
     # ALSO WE NEED TO KNOW IF THE DRONE STARTS AS ENU POSITION (EAST, NORTH, UP VECTOR) im not sure lol
-    positions = [] # To store the GPS positions for the KML
+    positions = [] # To store the GPS positions for the KML think yourcelf uwu 
 
     focal_length = 76 # mm
     sensor_width = 7.41 # mm 
     sensor_height = 5.56  # mm 
-    #ImgPixelWidth = 5184  # px
-    #ImgPixelHeight = 3888  # px
-    for image_name in sorted([f for f in os.listdir(images_folder) if f.endswith(('.JPG', '.jpeg', '.png'))]):
-        # Construct full file paths
-        image_path = os.path.join(images_folder, image_name)
-        yolo_file_name = image_name.replace('.JPG', '.txt').replace('.jpeg', '.txt').replace('.png', '.txt')  # Adjust as needed
-        yolo_path = os.path.join(yolo_folder, yolo_file_name)
 
-        bounding_boxes = read_yolo_annotations(yolo_path, class_mapping)
-
-        drone_lat, drone_lon, drone_alt = 45.0, -73.0, 100.0  # Example drone GPS (lat, lon, altitude)
-        gimbal_yaw, gimbal_pitch, gimbal_roll = 10, -30, 0  # Gimbal angles in degrees
-        drone_yaw, drone_pitch, drone_roll = 45, 0, 0  # Drone angles in degrees
+    for yolo_file_name in sorted([f for f in os.listdir(yolo_annotation_folder) if f.endswith(('.txt'))]):
+        yolo_path = os.path.join(yolo_annotation_folder, yolo_file_name)
+        telemetry_path = os.path.join(drone_telemetry_folder, yolo_file_name)
+        
+        # Read YOLO annotations
+        bounding_boxes = read_yolo_annotations(yolo_path)
+        
+        # Read telemetry data
+        try:
+            with open(telemetry_path, 'r') as f:
+                telemetry_lines = f.readlines()
+                if len(telemetry_lines) >= 9:  # Ensure we have all expected values
+                    drone_lat = float(telemetry_lines[0].strip())
+                    drone_lon = float(telemetry_lines[1].strip())
+                    drone_alt = float(telemetry_lines[2].strip())
+                    gimbal_pitch = float(telemetry_lines[3].strip())
+                    gimbal_roll = float(telemetry_lines[4].strip())
+                    gimbal_yaw = float(telemetry_lines[5].strip())
+                    drone_pitch = float(telemetry_lines[6].strip())
+                    drone_roll = float(telemetry_lines[7].strip())
+                    drone_yaw = float(telemetry_lines[8].strip())
+        except (FileNotFoundError, IndexError, ValueError) as e:
+            print(f"Error reading telemetry for {yolo_file_name}: {e}")
+            continue
 
         # Obtaining ground distance in ecef
         # or you could just do gps_alt_drone - gps_alt_ground and switch it to ecef after for t calculation
-        ground_ecef = geodetic_to_ecef(drone_lat, drone_lon, ground_alt)
+
+
+        #/////////////////////////////////////////////#
+        ground_ecef = geodetic_to_ecef(drone_lat, drone_lon, GROUND) #///// put the ground gps position of the drone at ground level///////
+        #/////////////////////////////////////////////#
+
+
         ground_alt = ground_ecef[2]
 
 
@@ -279,3 +224,52 @@ def main(images_folder, yolo_folder, output_json, output_yaml, output_html, temp
     # After processing all images and bounding boxes, create the KML file
     output_kml = "output.kml"
     create_kml(positions, output_kml)
+
+
+    """ Not needed for now
+# Function to convert ECEF to ENU (East, North, Up)
+def ecef_to_enu(drone_lat, drone_lon, drone_alt, point_ecef):
+    lat_rad = np.radians(drone_lat)
+    lon_rad = np.radians(drone_lon)
+
+    # Compute the ECEF position of the drone
+    drone_ecef = geodetic_to_ecef(drone_lat, drone_lon, drone_alt)
+
+    # Calculate the vector from the drone to the point in ECEF
+    ecef_vector = point_ecef - drone_ecef
+
+    # Rotation matrix from ECEF to ENU
+    R = np.array([
+        [-np.sin(lon_rad), np.cos(lon_rad), 0],
+        [-np.sin(lat_rad) * np.cos(lon_rad), -np.sin(lat_rad) * np.sin(lon_rad), np.cos(lat_rad)],
+        [np.cos(lat_rad) * np.cos(lon_rad), np.cos(lat_rad) * np.sin(lon_rad), np.sin(lat_rad)]
+    ], dtype=np.float64)
+
+    # Rotate the ECEF vector to the ENU frame
+    enu_vector = np.dot(R, ecef_vector)
+
+    return enu_vector
+
+# Function to convert ENU to ECEF with matrix multiplication (maintaining precision)
+def enu_to_ecef(drone_lat, drone_lon, drone_alt, enu_vector):
+    drone_ecef = geodetic_to_ecef(drone_lat, drone_lon, drone_alt)
+
+    # Convert drone geodetic coordinates to radians
+    lat_rad = np.radians(drone_lat)
+    lon_rad = np.radians(drone_lon)
+
+    # Rotation matrix from ENU to ECEF (transpose of ECEF-to-ENU)
+    R = np.array([
+        [-np.sin(lon_rad), -np.sin(lat_rad) * np.cos(lon_rad), np.cos(lat_rad) * np.cos(lon_rad)],
+        [np.cos(lon_rad), -np.sin(lat_rad) * np.sin(lon_rad), np.cos(lat_rad) * np.sin(lon_rad)],
+        [0, np.cos(lat_rad), np.sin(lat_rad)]
+    ], dtype=np.float64)
+
+    # Rotate the ENU vector back to ECEF
+    ecef_offset = np.dot(R, enu_vector)
+
+    # Add the offset to the ECEF position of the drone
+    ecef_vector = drone_ecef + ecef_offset
+
+    return ecef_vector
+"""
